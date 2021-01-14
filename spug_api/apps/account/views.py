@@ -8,7 +8,6 @@ from libs import JsonParser, Argument, human_datetime, json_response
 from libs.utils import get_request_real_ip
 from apps.account.models import User, Role, History
 from apps.setting.utils import AppSetting
-from libs.ldap import LDAP
 import ipaddress
 import time
 import uuid
@@ -68,8 +67,6 @@ class UserView(View):
         if error is None:
             user = User.objects.filter(pk=form.id).first()
             if user:
-                if user.type == 'ldap':
-                    return json_response(error='ldap账户无法删除，请使用禁用功能来禁止该账户访问系统')
                 user.role_id = None
                 user.deleted_at = human_datetime()
                 user.deleted_by = request.user
@@ -136,8 +133,6 @@ class SelfView(View):
         ).parse(request.body, True)
         if error is None:
             if form.get('old_password') and form.get('new_password'):
-                if request.user.type == 'ldap':
-                    return json_response(error='LDAP账户无法修改密码')
                 if len(form.new_password) < 6:
                     return json_response(error='请设置至少6位的新密码')
                 if request.user.verify_password(form.old_password):
@@ -163,21 +158,10 @@ def login(request):
         user = User.objects.filter(username=form.username, type=form.type).first()
         if user and not user.is_active:
             return json_response(error="账户已被系统禁用")
-        if form.type == 'ldap':
-            if not AppSetting.get_default('ldap_service'):
-                return json_response(error='请在系统设置中配置LDAP后再尝试通过该方式登录')
-            ldap = LDAP()
-            is_success, message = ldap.valid_user(form.username, form.password)
-            if is_success:
-                if not user:
-                    user = User.objects.create(username=form.username, nickname=form.username, type=form.type)
+
+        if user and user.deleted_by is None:
+            if user.verify_password(form.password):
                 return handle_user_info(user, x_real_ip)
-            elif message:
-                return json_response(error=message)
-        else:
-            if user and user.deleted_by is None:
-                if user.verify_password(form.password):
-                    return handle_user_info(user, x_real_ip)
 
         value = cache.get_or_set(form.username, 0, 86400)
         if value >= 3:
